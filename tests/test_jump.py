@@ -337,3 +337,25 @@ def test_motor_clamp_enforces_jump_limit_on_real_code_path():
     assert abs(max_delta_jump - jump_bound) < tolerance, (
         f"expected jump max_delta ({max_delta_jump}) ≈ bound ({jump_bound})"
     )
+
+
+def test_inference_command_vector_is_eight_long():
+    # Training and inference must agree on the command width, or the ONNX
+    # policy is fed a differently-shaped observation than it trained on.
+    import inspect
+
+    from playground.open_duck_mini_v2 import mujoco_infer
+
+    src = inspect.getsource(mujoco_infer.MjInfer.__init__)
+    assert "self.commands = [0.0] * 8" in src
+
+
+def test_inference_uses_shared_jump_constants():
+    # Guards against the window length drifting between train and inference.
+    import inspect
+
+    from playground.open_duck_mini_v2 import mujoco_infer
+
+    src = inspect.getsource(mujoco_infer)
+    assert "from playground.open_duck_mini_v2.jump import" in src
+    assert "advance_jump" in src
