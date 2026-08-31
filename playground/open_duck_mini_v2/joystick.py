@@ -95,6 +95,9 @@ def default_config() -> config_dict.ConfigDict:
                 stand_still=-0.2,  # was -1.0 TODO try to relax this a bit ?
                 alive=20.0,
                 imitation=1.0,
+                jump_takeoff=30.0,
+                jump_air_time=40.0,
+                jump_height=60.0,
             ),
             tracking_sigma=0.01,  # was working at 0.01
         ),
@@ -701,6 +704,38 @@ class Joystick(open_duck_mini_v2_base.OpenDuckMiniV2Env):
                 ignore_head=False,
             ),
         }
+
+        jump_active = info["jump_active"]
+        base_z = data.qpos[self._floating_base_qpos_addr + 2]
+        base_vz = data.qvel[self._floating_base_qvel_addr + 2]
+        grounded = jp.any(contact)
+        airborne = jp.all(~contact)
+
+        # Dense bootstrap term: reward pushing upward while a foot is still
+        # down. Without this the height reward is never discovered, because a
+        # walking policy never leaves the ground by accident.
+        ret["jump_takeoff"] = (
+            jp.clip(base_vz, 0.0, jp.inf) * grounded * jump_active
+        )
+        ret["jump_air_time"] = airborne * jump_active
+        ret["jump_height"] = (
+            jp.clip(
+                base_z - self._config.nominal_base_z,
+                0.0,
+                self._config.jump_height_cap,
+            )
+            * jump_active
+        )
+
+        # Gate the terms that would otherwise fight the jump.
+        # imitation pins joints to a walking reference at weight 15.
+        ret["imitation"] = ret["imitation"] * (1.0 - jump_active)
+        # stand_still punishes joint motion when the velocity command is ~0,
+        # which would penalise a jump in place.
+        ret["stand_still"] = ret["stand_still"] * (1.0 - jump_active)
+        # action_rate at -0.5 suppresses the fast action changes a jump needs.
+        # Soften rather than remove, or the motion gets jittery.
+        ret["action_rate"] = ret["action_rate"] * (1.0 - 0.5 * jump_active)
 
         return ret
 

@@ -111,3 +111,53 @@ def test_sample_command_returns_eight_values():
     env = Joystick(task="flat_terrain")
     cmd = env.sample_command(jax.random.PRNGKey(0))
     assert cmd.shape == (8,)
+
+
+def test_jump_terms_are_zero_when_not_jumping():
+    # The regression guard: with the jump inactive, every jump term must be
+    # exactly zero so walking behaviour is unaffected.
+    #
+    # jump_prob is forced to 0 rather than relying on the default 1/250 not
+    # firing -- otherwise this test flakes roughly once every 250 runs.
+    import jax
+    import jax.numpy as jp
+
+    from playground.open_duck_mini_v2.joystick import Joystick, default_config
+
+    cfg = default_config()
+    cfg.jump_prob = 0.0
+    env = Joystick(task="flat_terrain", config=cfg)
+
+    state = env.reset(jax.random.PRNGKey(0))
+    state = env.step(state, jp.zeros(env.action_size))
+
+    assert float(state.info["jump_active"]) == 0.0
+    for key in ("jump_takeoff", "jump_air_time", "jump_height"):
+        assert float(state.metrics[f"reward/{key}"]) == 0.0
+
+
+def test_jump_flag_reaches_the_command_vector_when_triggered():
+    # jump_prob forced to 1 so the trigger fires on the first step.
+    import jax
+    import jax.numpy as jp
+
+    from playground.open_duck_mini_v2.joystick import Joystick, default_config
+
+    cfg = default_config()
+    cfg.jump_prob = 1.0
+    env = Joystick(task="flat_terrain", config=cfg)
+
+    state = env.reset(jax.random.PRNGKey(0))
+    state = env.step(state, jp.zeros(env.action_size))
+
+    assert float(state.info["jump_active"]) == 1.0
+    assert float(state.info["command"][7]) == 1.0
+
+
+def test_jump_reward_scales_are_registered():
+    from playground.open_duck_mini_v2.joystick import default_config
+
+    scales = default_config().reward_config.scales
+    assert scales.jump_takeoff == 30.0
+    assert scales.jump_air_time == 40.0
+    assert scales.jump_height == 60.0
