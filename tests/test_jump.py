@@ -194,3 +194,54 @@ def test_jump_reward_gate_is_nan_safe_for_non_finite_input():
         # select and is exact regardless of the other branch's value.
         gated = jp.where(jump_active > 0.0, clipped, 0.0)
         assert float(gated) == 0.0
+
+
+def test_jump_reward_gate_is_nan_safe_via_real_reward_path():
+    """Regression test for review finding (Task 3, fix round 2).
+
+    The expression-level test above documents the arithmetic but never
+    touches joystick.py, so it would not catch a revert of the two jp.where
+    gates back to multiplicative gating. This test drives the real code
+    path: it builds the env, reset()s it, corrupts the base's vertical
+    velocity (inf) and height (nan) directly in the mjx.Data, forces
+    jump_active = 0.0, and calls `_get_reward` directly.
+
+    contact is forced all-True (grounded=True) rather than the more
+    "natural" all-False, because jump_takeoff multiplies by `grounded`:
+    with grounded=False the old buggy multiplicative form degenerates to
+    `inf * 0.0 * 0.0`, which XLA/JAX evaluates to 0.0 -- accidentally
+    masking the very bug this test exists to catch. With grounded=True the
+    corrupted base_vz reaches the gate unmasked, so a revert to
+    multiplicative gating actually fails this test (verified manually while
+    writing it: reverting joystick.py's jp.where back to `* jump_active`
+    made `ret["jump_takeoff"]` and `ret["jump_height"]` both come back as
+    nan instead of 0.0, failing the asserts below).
+    """
+    import jax
+    import jax.numpy as jp
+
+    from playground.open_duck_mini_v2.joystick import Joystick, default_config
+
+    cfg = default_config()
+    cfg.jump_prob = 0.0
+    env = Joystick(task="flat_terrain", config=cfg)
+
+    state = env.reset(jax.random.PRNGKey(0))
+
+    bad_qvel = state.data.qvel.at[env._floating_base_qvel_addr + 2].set(jp.inf)
+    bad_qpos = state.data.qpos.at[env._floating_base_qpos_addr + 2].set(jp.nan)
+    data = state.data.replace(qvel=bad_qvel, qpos=bad_qpos)
+
+    info = dict(state.info)
+    info["jump_active"] = jp.float32(0.0)
+
+    contact = jp.ones(2, dtype=bool)  # grounded=True; see docstring.
+    first_contact = jp.zeros(2, dtype=bool)
+    done = jp.float32(0.0)
+
+    ret = env._get_reward(
+        data, jp.zeros(env.action_size), info, {}, done, first_contact, contact
+    )
+
+    assert float(ret["jump_takeoff"]) == 0.0
+    assert float(ret["jump_height"]) == 0.0
