@@ -94,3 +94,20 @@ def test_works_under_jax_jit():
 
 def test_jump_motor_velocity_value():
     assert JUMP_MOTOR_VELOCITY == 15.0
+
+
+def test_observation_size_is_102_with_jump_command():
+    from playground.open_duck_mini_v2.joystick import Joystick
+
+    env = Joystick(task="flat_terrain")
+    assert int(env.observation_size["state"][0]) == 102
+
+
+def test_sample_command_returns_eight_values():
+    import jax
+
+    from playground.open_duck_mini_v2.joystick import Joystick
+
+    env = Joystick(task="flat_terrain")
+    cmd = env.sample_command(jax.random.PRNGKey(0))
+    assert cmd.shape == (8,)

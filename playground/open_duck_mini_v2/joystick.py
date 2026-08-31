@@ -28,6 +28,12 @@ from mujoco_playground._src.collision import geoms_colliding
 
 from . import constants
 from . import base as open_duck_mini_v2_base
+from playground.open_duck_mini_v2.jump import (
+    JUMP_COOLDOWN_STEPS,
+    JUMP_MOTOR_VELOCITY,
+    JUMP_WINDOW_STEPS,
+    advance_jump,
+)
 
 # from playground.common.utils import LowPassActionFilter
 from playground.common.poly_reference_motion import PolyReferenceMotion
@@ -57,6 +63,12 @@ def default_config() -> config_dict.ConfigDict:
         history_len=0,
         soft_joint_pos_limit_factor=0.95,
         max_motor_velocity=5.24,  # rad/s
+        jump_window_steps=JUMP_WINDOW_STEPS,
+        jump_cooldown_steps=JUMP_COOLDOWN_STEPS,
+        jump_prob=1.0 / 250.0,  # ~ one jump attempt every 5 s at 50 Hz
+        jump_motor_velocity=JUMP_MOTOR_VELOCITY,  # rad/s while the jump window is open
+        jump_height_cap=0.15,  # m, ceiling on the height reward
+        nominal_base_z=0.22,  # m, standing base height
         noise_config=config_dict.create(
             level=1.0,  # Set to 0.0 to disable noise.
             action_min_delay=0,  # env steps
@@ -299,6 +311,10 @@ class Joystick(open_duck_mini_v2_base.OpenDuckMiniV2Env):
             "imitation_i": 0,
             "current_reference_motion": current_reference_motion,
             "imitation_phase": jp.zeros(2),
+            # jump related
+            "jump_timer": jp.int32(0),
+            "jump_cooldown": jp.int32(0),
+            "jump_active": jp.float32(0.0),
         }
 
         metrics = {}
@@ -401,6 +417,22 @@ class Joystick(open_duck_mini_v2_base.OpenDuckMiniV2Env):
 
         ####
 
+        # Jump state machine. Fires at random during training; the same
+        # advance_jump() runs at inference with a key-press trigger.
+        state.info["rng"], jump_rng = jax.random.split(state.info["rng"])
+        jump_trigger = jax.random.bernoulli(
+            jump_rng, p=self._config.jump_prob
+        ).astype(jp.float32)
+        jump_timer, jump_cooldown, jump_active = advance_jump(
+            state.info["jump_timer"],
+            state.info["jump_cooldown"],
+            jump_trigger,
+        )
+        state.info["jump_timer"] = jump_timer.astype(jp.int32)
+        state.info["jump_cooldown"] = jump_cooldown.astype(jp.int32)
+        state.info["jump_active"] = jump_active.astype(jp.float32)
+        state.info["command"] = state.info["command"].at[7].set(jump_active)
+
         motor_targets = (
             self._default_actuator + action_w_delay * self._config.action_scale
         )
@@ -458,6 +490,10 @@ class Joystick(open_duck_mini_v2_base.OpenDuckMiniV2Env):
             state.info["step"] > 500,
             self.sample_command(cmd_rng),
             state.info["command"],
+        )
+        # sample_command() zeroes slot 7; the timer owns it, so restore it.
+        state.info["command"] = state.info["command"].at[7].set(
+            state.info["jump_active"]
         )
         state.info["step"] = jp.where(
             done | (state.info["step"] > 500),
@@ -710,7 +746,7 @@ class Joystick(open_duck_mini_v2_base.OpenDuckMiniV2Env):
         # With 10% chance, set everything to zero.
         return jp.where(
             jax.random.bernoulli(rng4, p=0.1),
-            jp.zeros(7),
+            jp.zeros(8),
             jp.hstack(
                 [
                     lin_vel_x,
@@ -720,6 +756,7 @@ class Joystick(open_duck_mini_v2_base.OpenDuckMiniV2Env):
                     head_pitch,
                     head_yaw,
                     head_roll,
+                    0.0,  # jump flag; owned by the timer in step()
                 ]
             ),
         )
