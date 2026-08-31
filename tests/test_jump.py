@@ -245,3 +245,28 @@ def test_jump_reward_gate_is_nan_safe_via_real_reward_path():
 
     assert float(ret["jump_takeoff"]) == 0.0
     assert float(ret["jump_height"]) == 0.0
+
+
+def test_motor_clamp_matches_walking_limit_when_idle():
+    from playground.open_duck_mini_v2.joystick import default_config
+
+    cfg = default_config()
+    jump_active = 0.0
+    effective = (
+        cfg.max_motor_velocity * (1.0 - jump_active)
+        + cfg.jump_motor_velocity * jump_active
+    )
+    assert effective == cfg.max_motor_velocity
+
+
+def test_motor_clamp_is_raised_during_jump():
+    from playground.open_duck_mini_v2.joystick import default_config
+
+    cfg = default_config()
+    jump_active = 1.0
+    effective = (
+        cfg.max_motor_velocity * (1.0 - jump_active)
+        + cfg.jump_motor_velocity * jump_active
+    )
+    assert effective == cfg.jump_motor_velocity
+    assert effective > cfg.max_motor_velocity

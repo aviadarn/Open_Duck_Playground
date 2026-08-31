@@ -443,12 +443,17 @@ class Joystick(open_duck_mini_v2_base.OpenDuckMiniV2Env):
         if USE_MOTOR_SPEED_LIMITS:
             prev_motor_targets = state.info["motor_targets"]
 
+            # Walking keeps the tuned servo limit; the jump window raises it.
+            # Sim-only: real STS3215 servos cannot slew this fast.
+            max_motor_velocity = (
+                self._config.max_motor_velocity * (1.0 - jump_active)
+                + self._config.jump_motor_velocity * jump_active
+            )
+
             motor_targets = jp.clip(
                 motor_targets,
-                prev_motor_targets
-                - self._config.max_motor_velocity * self.dt,  # control dt
-                prev_motor_targets
-                + self._config.max_motor_velocity * self.dt,  # control dt
+                prev_motor_targets - max_motor_velocity * self.dt,  # control dt
+                prev_motor_targets + max_motor_velocity * self.dt,  # control dt
             )
 
         # motor_targets.at[5:9].set(state.info["command"][3:])  # head joints
