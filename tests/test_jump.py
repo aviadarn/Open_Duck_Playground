@@ -270,3 +270,70 @@ def test_motor_clamp_is_raised_during_jump():
     )
     assert effective == cfg.jump_motor_velocity
     assert effective > cfg.max_motor_velocity
+
+
+def test_motor_clamp_enforces_jump_limit_on_real_code_path():
+    """Regression test: the actual clamp in joystick.step() uses jump_active correctly.
+    
+    This test drives the real environment and verifies that motor_targets delta per
+    step actually matches the configured bounds. The arithmetic-only tests above
+    cannot catch reversions or swapped interpolation weights.
+    
+    With a large constant action, the raw motor target is always far outside the
+    clamp band, so the achieved per-step delta becomes exactly the bound. The action
+    delay (up to 3 steps) may produce small deltas early on, so we track the maximum
+    delta across ~10 steps and assert it matches the jump/walking bounds.
+    """
+    import jax
+    import jax.numpy as jp
+    
+    from playground.open_duck_mini_v2.joystick import Joystick, default_config
+    
+    # Build two environments: one that never jumps, one that jumps immediately.
+    cfg_walk = default_config()
+    cfg_walk.jump_prob = 0.0
+    env_walk = Joystick(task="flat_terrain", config=cfg_walk)
+    
+    cfg_jump = default_config()
+    cfg_jump.jump_prob = 1.0
+    env_jump = Joystick(task="flat_terrain", config=cfg_jump)
+    
+    # Large constant action that saturates the clamp.
+    large_action = jp.ones(env_walk.action_size) * 10.0
+    
+    # Step ~10 times and track max motor_targets delta.
+    state_walk = env_walk.reset(jax.random.PRNGKey(0))
+    max_delta_walk = 0.0
+    for _ in range(10):
+        prev_targets = state_walk.info["motor_targets"]
+        state_walk = env_walk.step(state_walk, large_action)
+        curr_targets = state_walk.info["motor_targets"]
+        delta = jp.max(jp.abs(curr_targets - prev_targets))
+        max_delta_walk = max(max_delta_walk, float(delta))
+    
+    state_jump = env_jump.reset(jax.random.PRNGKey(0))
+    max_delta_jump = 0.0
+    for _ in range(10):
+        prev_targets = state_jump.info["motor_targets"]
+        state_jump = env_jump.step(state_jump, large_action)
+        curr_targets = state_jump.info["motor_targets"]
+        delta = jp.max(jp.abs(curr_targets - prev_targets))
+        max_delta_jump = max(max_delta_jump, float(delta))
+    
+    # The jump environment should have a larger max delta than the walking environment.
+    assert max_delta_jump > max_delta_walk, (
+        f"expected jump max_delta ({max_delta_jump}) > walk max_delta ({max_delta_walk})"
+    )
+    
+    # Walking env's max delta should not exceed the walking bound (with small tolerance).
+    walking_bound = cfg_walk.max_motor_velocity * env_walk.dt
+    tolerance = 1e-5
+    assert max_delta_walk <= walking_bound + tolerance, (
+        f"expected walk max_delta ({max_delta_walk}) <= bound ({walking_bound})"
+    )
+    
+    # Jump env's max delta should be close to the jump bound (with small tolerance).
+    jump_bound = cfg_jump.jump_motor_velocity * env_jump.dt
+    assert abs(max_delta_jump - jump_bound) < tolerance, (
+        f"expected jump max_delta ({max_delta_jump}) ≈ bound ({jump_bound})"
+    )
