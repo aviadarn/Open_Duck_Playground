@@ -6,13 +6,16 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "framesviewer>=1.0.2",
-    "jax[cuda12]>=0.5.0",
-    "jaxlib>=0.5.0",
+    # jax >=0.9 removed jax.device_put_replicated, still called by brax 0.14.2
+    "jax[cuda12]>=0.5.0,<0.9 ; sys_platform == 'linux'",
+    "jax>=0.5.0,<0.9 ; sys_platform != 'linux'",
+    "jaxlib>=0.5.0,<0.9",
     "jaxtyping>=0.2.38",
     "matplotlib>=3.10.0",
     "mediapy>=1.2.2",
     "onnxruntime>=1.20.1",
-    "playground>=0.0.3",
+    # playground >=0.1.0 removed mujoco_playground._src.collision (geoms_colliding)
+    "playground==0.0.5",
     "pygame>=2.6.1",
     "tensorflow>=2.18.0",
     "tf2onnx>=1.16.1",
