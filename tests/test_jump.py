@@ -247,6 +247,53 @@ def test_jump_reward_gate_is_nan_safe_via_real_reward_path():
     assert float(ret["jump_height"]) == 0.0
 
 
+def test_jump_reward_active_branch_is_nan_safe_via_real_reward_path():
+    """Mirror of the test above for the ACTIVE branch (jump_active = 1.0).
+
+    The inactive-branch test only proves the jp.where gate returns the
+    literal 0.0 when jump_active == 0.0; it says nothing about whether the
+    active branch itself sanitises non-finite physics reads. jp.clip does
+    not sanitize non-finite input (clip(nan, 0, cap) == nan and
+    clip(inf, 0, cap) == inf), so a non-finite base_vz/base_z during an open
+    jump window must be caught by an explicit jp.nan_to_num wrap around the
+    whole jp.where, or it propagates into the summed reward and then into
+    training gradients.
+
+    contact is forced all-True (grounded=True), same as the sibling test:
+    with grounded=False, `grounded` is a python/jax False and the
+    expression collapses to 0.0 regardless of base_vz, which would mask
+    the very bug this test exists to catch.
+    """
+    import jax
+    import jax.numpy as jp
+
+    from playground.open_duck_mini_v2.joystick import Joystick, default_config
+
+    cfg = default_config()
+    cfg.jump_prob = 0.0
+    env = Joystick(task="flat_terrain", config=cfg)
+
+    state = env.reset(jax.random.PRNGKey(0))
+
+    bad_qvel = state.data.qvel.at[env._floating_base_qvel_addr + 2].set(jp.inf)
+    bad_qpos = state.data.qpos.at[env._floating_base_qpos_addr + 2].set(jp.nan)
+    data = state.data.replace(qvel=bad_qvel, qpos=bad_qpos)
+
+    info = dict(state.info)
+    info["jump_active"] = jp.float32(1.0)
+
+    contact = jp.ones(2, dtype=bool)  # grounded=True; see docstring.
+    first_contact = jp.zeros(2, dtype=bool)
+    done = jp.float32(0.0)
+
+    ret = env._get_reward(
+        data, jp.zeros(env.action_size), info, {}, done, first_contact, contact
+    )
+
+    assert bool(jp.isfinite(ret["jump_takeoff"]))
+    assert bool(jp.isfinite(ret["jump_height"]))
+
+
 def test_motor_clamp_matches_walking_limit_when_idle():
     from playground.open_duck_mini_v2.joystick import default_config
 

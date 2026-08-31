@@ -112,8 +112,13 @@ class MjInfer(MJInferBase):
         if keycode == 32:  # space
             # Only latch the request. The timer owns commands[7]; writing it
             # here would be clobbered, because this callback zeroes the
-            # velocity commands on every keypress.
+            # velocity commands on every keypress. Return immediately so we
+            # don't fall through to that zeroing code below: jumps fire
+            # independently of the velocity command during training, so the
+            # robot should keep walking (or standing) through a jump rather
+            # than being forced to a dead stop just because space was hit.
             self.jump_requested = True
+            return
         if keycode == 72:  # h
             self.head_control_mode = not self.head_control_mode
         lin_vel_x = 0

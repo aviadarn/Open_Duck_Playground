@@ -29,9 +29,7 @@ from mujoco_playground._src.collision import geoms_colliding
 from . import constants
 from . import base as open_duck_mini_v2_base
 from playground.open_duck_mini_v2.jump import (
-    JUMP_COOLDOWN_STEPS,
     JUMP_MOTOR_VELOCITY,
-    JUMP_WINDOW_STEPS,
     advance_jump,
 )
 
@@ -63,11 +61,10 @@ def default_config() -> config_dict.ConfigDict:
         history_len=0,
         soft_joint_pos_limit_factor=0.95,
         max_motor_velocity=5.24,  # rad/s
-        jump_window_steps=JUMP_WINDOW_STEPS,
-        jump_cooldown_steps=JUMP_COOLDOWN_STEPS,
         jump_prob=1.0 / 250.0,  # ~ one jump attempt every 5 s at 50 Hz
         jump_motor_velocity=JUMP_MOTOR_VELOCITY,  # rad/s while the jump window is open
         jump_height_cap=0.15,  # m, ceiling on the height reward
+        jump_takeoff_vz_cap=5.0,  # m/s, ceiling on the takeoff reward
         nominal_base_z=0.22,  # m, standing base height
         noise_config=config_dict.create(
             level=1.0,  # Set to 0.0 to disable noise.
@@ -727,20 +724,24 @@ class Joystick(open_duck_mini_v2_base.OpenDuckMiniV2Env):
         # selects the literal 0.0 on the inactive branch regardless of what
         # the other branch evaluates to, which is what actually guarantees
         # the term is exactly 0.0 when jump_active == 0.0.
-        ret["jump_takeoff"] = jp.where(
-            jump_active > 0.0,
-            jp.clip(base_vz, 0.0, jp.inf) * grounded,
-            0.0,
+        ret["jump_takeoff"] = jp.nan_to_num(
+            jp.where(
+                jump_active > 0.0,
+                jp.clip(base_vz, 0.0, self._config.jump_takeoff_vz_cap) * grounded,
+                0.0,
+            )
         )
         ret["jump_air_time"] = airborne * jump_active
-        ret["jump_height"] = jp.where(
-            jump_active > 0.0,
-            jp.clip(
-                base_z - self._config.nominal_base_z,
+        ret["jump_height"] = jp.nan_to_num(
+            jp.where(
+                jump_active > 0.0,
+                jp.clip(
+                    base_z - self._config.nominal_base_z,
+                    0.0,
+                    self._config.jump_height_cap,
+                ),
                 0.0,
-                self._config.jump_height_cap,
-            ),
-            0.0,
+            )
         )
 
         # Gate the terms that would otherwise fight the jump.
