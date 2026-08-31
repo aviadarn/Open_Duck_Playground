@@ -161,3 +161,36 @@ def test_jump_reward_scales_are_registered():
     assert scales.jump_takeoff == 30.0
     assert scales.jump_air_time == 40.0
     assert scales.jump_height == 60.0
+
+
+def test_jump_reward_gate_is_nan_safe_for_non_finite_input():
+    """Regression test for review finding (Task 3, fix round 1).
+
+    A multiplicative gate (`value * jump_active`) does not guarantee exactly
+    0.0 when jump_active == 0.0: jp.clip does not sanitize non-finite input
+    (clip(nan, 0, inf) == nan, clip(inf, 0, inf) == inf), and IEEE-754 makes
+    both absorbing under multiplication by zero (nan * 0.0 == nan and
+    inf * 0.0 == nan). jump_takeoff/jump_height in joystick.py use jp.where
+    instead, which selects the literal 0.0 on the inactive branch regardless
+    of what the active branch evaluates to. This test exercises the two
+    gating expressions directly (not via MuJoCo) and contrasts them.
+    """
+    import jax.numpy as jp
+
+    jump_active = jp.float32(0.0)
+
+    for bad_value in (jp.nan, jp.inf):
+        clipped = jp.clip(jp.float32(bad_value), 0.0, jp.inf)
+
+        # Document the bug: the multiplicative form leaks NaN instead of
+        # producing exactly 0.0.
+        multiplicative = clipped * jump_active
+        assert jp.isnan(multiplicative), (
+            "expected the multiplicative gate to demonstrate the bug "
+            f"(got {multiplicative} for input {bad_value})"
+        )
+
+        # The fix actually used in joystick.py: jp.where is a branchless
+        # select and is exact regardless of the other branch's value.
+        gated = jp.where(jump_active > 0.0, clipped, 0.0)
+        assert float(gated) == 0.0

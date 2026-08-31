@@ -714,17 +714,28 @@ class Joystick(open_duck_mini_v2_base.OpenDuckMiniV2Env):
         # Dense bootstrap term: reward pushing upward while a foot is still
         # down. Without this the height reward is never discovered, because a
         # walking policy never leaves the ground by accident.
-        ret["jump_takeoff"] = (
-            jp.clip(base_vz, 0.0, jp.inf) * grounded * jump_active
+        #
+        # jp.where (not a multiplicative gate) is required here: jp.clip does
+        # not sanitize non-finite input (clip(nan, 0, inf) == nan and
+        # clip(inf, 0, inf) == inf), and both are absorbing under
+        # multiplication by 0.0 (x * 0.0 == nan for non-finite x). jp.where
+        # selects the literal 0.0 on the inactive branch regardless of what
+        # the other branch evaluates to, which is what actually guarantees
+        # the term is exactly 0.0 when jump_active == 0.0.
+        ret["jump_takeoff"] = jp.where(
+            jump_active > 0.0,
+            jp.clip(base_vz, 0.0, jp.inf) * grounded,
+            0.0,
         )
         ret["jump_air_time"] = airborne * jump_active
-        ret["jump_height"] = (
+        ret["jump_height"] = jp.where(
+            jump_active > 0.0,
             jp.clip(
                 base_z - self._config.nominal_base_z,
                 0.0,
                 self._config.jump_height_cap,
-            )
-            * jump_active
+            ),
+            0.0,
         )
 
         # Gate the terms that would otherwise fight the jump.
