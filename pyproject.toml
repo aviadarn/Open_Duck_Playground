@@ -24,3 +24,8 @@ dependencies = [
 requires = ["setuptools"]
 [tool.setuptools]
 packages = ["playground"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

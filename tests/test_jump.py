@@ -1,0 +1,96 @@
+"""Tests for the shared jump state machine."""
+
+import numpy as np
+
+from playground.open_duck_mini_v2.jump import (
+    JUMP_COOLDOWN_STEPS,
+    JUMP_MOTOR_VELOCITY,
+    JUMP_WINDOW_STEPS,
+    advance_jump,
+)
+
+
+def test_trigger_from_idle_opens_the_window():
+    timer, cooldown, active = advance_jump(0, 0, 1)
+    assert timer == JUMP_WINDOW_STEPS
+    assert cooldown == 0
+    assert active == 1.0
+
+
+def test_no_trigger_stays_idle():
+    timer, cooldown, active = advance_jump(0, 0, 0)
+    assert timer == 0
+    assert cooldown == 0
+    assert active == 0.0
+
+
+def test_window_counts_down():
+    timer, cooldown, active = advance_jump(JUMP_WINDOW_STEPS, 0, 0)
+    assert timer == JUMP_WINDOW_STEPS - 1
+    assert active == 1.0
+
+
+def test_window_end_starts_cooldown():
+    timer, cooldown, active = advance_jump(1, 0, 0)
+    assert timer == 0
+    assert cooldown == JUMP_COOLDOWN_STEPS
+    assert active == 0.0
+
+
+def test_trigger_ignored_during_window():
+    # Re-triggering mid-jump must not extend or restart the window.
+    timer, _, _ = advance_jump(10, 0, 1)
+    assert timer == 9
+
+
+def test_trigger_ignored_during_cooldown():
+    timer, cooldown, active = advance_jump(0, 10, 1)
+    assert timer == 0
+    assert cooldown == 9
+    assert active == 0.0
+
+
+def test_cooldown_expires_then_can_fire_again():
+    timer, cooldown, _ = advance_jump(0, 1, 0)
+    assert cooldown == 0
+    timer, cooldown, active = advance_jump(timer, cooldown, 1)
+    assert timer == JUMP_WINDOW_STEPS
+    assert active == 1.0
+
+
+def test_full_cycle_step_by_step():
+    timer, cooldown = 0, 0
+    timer, cooldown, active = advance_jump(timer, cooldown, 1)
+    assert active == 1.0
+    # Run out the window.
+    for _ in range(JUMP_WINDOW_STEPS):
+        timer, cooldown, active = advance_jump(timer, cooldown, 0)
+    assert active == 0.0
+    assert cooldown == JUMP_COOLDOWN_STEPS
+    # Run out the cooldown.
+    for _ in range(JUMP_COOLDOWN_STEPS):
+        timer, cooldown, active = advance_jump(timer, cooldown, 0)
+    assert cooldown == 0
+    # Ready again.
+    timer, cooldown, active = advance_jump(timer, cooldown, 1)
+    assert active == 1.0
+
+
+def test_works_with_numpy_arrays():
+    timer = np.array(0)
+    cooldown = np.array(0)
+    timer, cooldown, active = advance_jump(timer, cooldown, np.array(1))
+    assert int(timer) == JUMP_WINDOW_STEPS
+    assert float(active) == 1.0
+
+
+def test_works_under_jax_jit():
+    import jax
+
+    timer, cooldown, active = jax.jit(advance_jump)(0, 0, 1)
+    assert int(timer) == JUMP_WINDOW_STEPS
+    assert float(active) == 1.0
+
+
+def test_jump_motor_velocity_value():
+    assert JUMP_MOTOR_VELOCITY == 15.0
