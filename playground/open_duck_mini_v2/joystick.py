@@ -65,7 +65,6 @@ def default_config() -> config_dict.ConfigDict:
         jump_motor_velocity=JUMP_MOTOR_VELOCITY,  # rad/s while the jump window is open
         jump_height_cap=0.15,  # m, ceiling on the height reward
         jump_takeoff_vz_cap=5.0,  # m/s, ceiling on the takeoff reward
-        nominal_base_z=0.22,  # m, standing base height
         noise_config=config_dict.create(
             level=1.0,  # Set to 0.0 to disable noise.
             action_min_delay=0,  # env steps
@@ -315,6 +314,7 @@ class Joystick(open_duck_mini_v2_base.OpenDuckMiniV2Env):
             "jump_timer": jp.int32(0),
             "jump_cooldown": jp.int32(0),
             "jump_active": jp.float32(0.0),
+            "jump_base_z0": jp.float32(0.0),
         }
 
         metrics = {}
@@ -423,6 +423,7 @@ class Joystick(open_duck_mini_v2_base.OpenDuckMiniV2Env):
         jump_trigger = jax.random.bernoulli(
             jump_rng, p=self._config.jump_prob
         ).astype(jp.float32)
+        prev_active = state.info["jump_active"]
         jump_timer, jump_cooldown, jump_active = advance_jump(
             state.info["jump_timer"],
             state.info["jump_cooldown"],
@@ -432,6 +433,21 @@ class Joystick(open_duck_mini_v2_base.OpenDuckMiniV2Env):
         state.info["jump_cooldown"] = jump_cooldown.astype(jp.int32)
         state.info["jump_active"] = jump_active.astype(jp.float32)
         state.info["command"] = state.info["command"].at[7].set(jump_active)
+
+        # Latch the base height at the instant the jump window opens (the
+        # crouch height at trigger time), so jump_height in _get_reward can
+        # be measured against a datum the robot can actually clear instead
+        # of the absolute standing height (nominal_base_z), which a jump
+        # launched from a crouch may never exceed even while airborne.
+        # Branchless so this survives jit/vmap; state.data here is the
+        # pre-physics-step data, i.e. the crouch height at trigger time.
+        just_fired = (jump_active > 0.0) * (prev_active <= 0.0)
+        base_z_now = state.data.qpos[self._floating_base_qpos_addr + 2]
+        jump_base_z0 = (
+            just_fired * base_z_now
+            + (1.0 - just_fired) * state.info["jump_base_z0"]
+        )
+        state.info["jump_base_z0"] = jump_base_z0.astype(jp.float32)
 
         motor_targets = (
             self._default_actuator + action_w_delay * self._config.action_scale
@@ -736,7 +752,7 @@ class Joystick(open_duck_mini_v2_base.OpenDuckMiniV2Env):
             jp.where(
                 jump_active > 0.0,
                 jp.clip(
-                    base_z - self._config.nominal_base_z,
+                    base_z - info["jump_base_z0"],
                     0.0,
                     self._config.jump_height_cap,
                 ),

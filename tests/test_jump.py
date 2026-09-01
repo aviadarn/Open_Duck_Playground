@@ -406,3 +406,116 @@ def test_inference_uses_shared_jump_constants():
     src = inspect.getsource(mujoco_infer)
     assert "from playground.open_duck_mini_v2.jump import" in src
     assert "advance_jump" in src
+
+
+def test_jump_base_z0_latches_at_window_open_and_holds():
+    """(a) jump_base_z0 is latched exactly once, at the step the jump window
+    opens, and stays fixed for the rest of that window.
+
+    jump_prob is forced to 1.0 so the trigger fires on the very first step.
+    """
+    import jax
+    import jax.numpy as jp
+
+    from playground.open_duck_mini_v2.joystick import Joystick, default_config
+
+    cfg = default_config()
+    cfg.jump_prob = 1.0
+    env = Joystick(task="flat_terrain", config=cfg)
+
+    state = env.reset(jax.random.PRNGKey(0))
+    assert float(state.info["jump_base_z0"]) == 0.0  # seeded, nothing latched yet
+
+    base_z_before_trigger = float(state.data.qpos[env._floating_base_qpos_addr + 2])
+
+    state = env.step(state, jp.zeros(env.action_size))
+    assert float(state.info["jump_active"]) == 1.0
+    latched = float(state.info["jump_base_z0"])
+    assert latched == base_z_before_trigger
+
+    # JUMP_WINDOW_STEPS == 40, so the window is still open after one more
+    # step -- the latch must not move while jump_active stays 1.0.
+    state = env.step(state, jp.zeros(env.action_size))
+    assert float(state.info["jump_active"]) == 1.0
+    assert float(state.info["jump_base_z0"]) == latched
+
+
+def test_jump_height_pays_above_latched_datum_even_below_old_absolute_height():
+    """(b) The regression this fix targets.
+
+    jump_height must pay a positive reward once base_z clears the *latched*
+    jump_base_z0, even when base_z never reaches the old absolute datum
+    (nominal_base_z == 0.22, the standing height). This is exactly the
+    scenario that produced jump_height == 0.0 for 100M training steps: the
+    robot jumps from a crouch, so its base sits below 0.22 the entire time,
+    even fully airborne.
+    """
+    import jax
+    import jax.numpy as jp
+
+    from playground.open_duck_mini_v2.joystick import Joystick, default_config
+
+    cfg = default_config()
+    cfg.jump_prob = 0.0
+    env = Joystick(task="flat_terrain", config=cfg)
+
+    state = env.reset(jax.random.PRNGKey(0))
+
+    crouch_z0 = 0.15  # base height latched when the jump window opened
+    base_z = 0.18  # airborne now: above the crouch, but still below 0.22
+    assert base_z < 0.22  # the old absolute datum this fix removes
+
+    qpos = state.data.qpos.at[env._floating_base_qpos_addr + 2].set(
+        jp.float32(base_z)
+    )
+    data = state.data.replace(qpos=qpos)
+
+    info = dict(state.info)
+    info["jump_active"] = jp.float32(1.0)
+    info["jump_base_z0"] = jp.float32(crouch_z0)
+
+    contact = jp.ones(2, dtype=bool)  # grounded=True; matches sibling tests.
+    first_contact = jp.zeros(2, dtype=bool)
+    done = jp.float32(0.0)
+
+    ret = env._get_reward(
+        data, jp.zeros(env.action_size), info, {}, done, first_contact, contact
+    )
+
+    assert float(ret["jump_height"]) > 0.0
+    expected = min(base_z - crouch_z0, cfg.jump_height_cap)
+    assert abs(float(ret["jump_height"]) - expected) < 1e-5
+
+
+def test_jump_height_is_zero_when_inactive_even_above_latched_datum():
+    """(c) The inactive-gate invariant still holds: jump_height must be
+    exactly 0.0 whenever jump_active == 0.0, regardless of how base_z
+    relates to the latched jump_base_z0.
+    """
+    import jax
+    import jax.numpy as jp
+
+    from playground.open_duck_mini_v2.joystick import Joystick, default_config
+
+    cfg = default_config()
+    cfg.jump_prob = 0.0
+    env = Joystick(task="flat_terrain", config=cfg)
+
+    state = env.reset(jax.random.PRNGKey(0))
+
+    qpos = state.data.qpos.at[env._floating_base_qpos_addr + 2].set(jp.float32(0.30))
+    data = state.data.replace(qpos=qpos)
+
+    info = dict(state.info)
+    info["jump_active"] = jp.float32(0.0)
+    info["jump_base_z0"] = jp.float32(0.10)  # base_z - jump_base_z0 = 0.20 > 0
+
+    contact = jp.ones(2, dtype=bool)
+    first_contact = jp.zeros(2, dtype=bool)
+    done = jp.float32(0.0)
+
+    ret = env._get_reward(
+        data, jp.zeros(env.action_size), info, {}, done, first_contact, contact
+    )
+
+    assert float(ret["jump_height"]) == 0.0
