@@ -20,7 +20,7 @@ Measured from the MJCF:
 | quantity | value |
 |---|---|
 | total mass | 2.107 kg (20.67 N) |
-| standing base height | 0.220 m |
+| standing base height | 0.15 m |
 | actuator force limit | 3.23 N·m (`forcerange`) |
 | position gain | kp 13.37–17.8 |
 | motor velocity clamp | 5.24 rad/s |
@@ -107,10 +107,17 @@ normal walking.
 |---|---|---|
 | `jump_takeoff` | `clip(base_vz, 0, inf)` while at least one foot is in contact | 30.0 |
 | `jump_air_time` | both feet off the floor | 40.0 |
-| `jump_height` | `clip(base_z - nominal_z, 0, cap)` | 60.0 |
+| `jump_height` | `clip(base_z - jump_base_z0, 0, cap) * airborne` | 300.0 |
 
-where `nominal_z` is the standing base height, 0.220 m, and `cap` is 0.15 m so a
-single enormous outlier cannot dominate the return.
+where `jump_base_z0` is the base height latched at the instant the jump window
+opens (not an absolute datum like the 0.15 m standing height) and `cap` is
+0.25 m so a single enormous outlier cannot dominate the return. Latching at
+window-open rather than measuring against a fixed standing height is
+necessary because a crouching robot can leave the ground without ever
+exceeding standing height, so an absolute datum can read 0.00 for an entire
+run even when the jump is real. `jump_height` is also gated on `airborne`
+(both feet off the ground) so that holding a raised-leg pose during the
+window cannot out-earn an actual ballistic jump.
 
 `jump_takeoff` is the bootstrap term. It is dense and rewards pushing *before*
 leaving the ground; without it the height reward is never discovered from a

@@ -11,7 +11,12 @@ silently degrade.
 # Control rate is 50 Hz (ctrl_dt = 0.02).
 JUMP_WINDOW_STEPS = 40  # 0.8 s: crouch, flight and landing with margin
 JUMP_COOLDOWN_STEPS = 50  # 1.0 s: blocks re-trigger while recovering
-JUMP_MOTOR_VELOCITY = 15.0  # rad/s while the jump window is open; sim-only
+JUMP_MOTOR_VELOCITY = 30.0  # rad/s while the jump window is open; sim-only.
+# Deliberately unphysical for the real STS3215 servos -- a 10 cm jump needs
+# takeoff velocity sqrt(2 * 9.81 * 0.10) ~= 1.4 m/s, which through the leg's
+# ~0.09 m effective moment arm is ~15.6 rad/s of joint rate. 15.0 sat just
+# below that and was the binding constraint on jump height in sim, so it is
+# raised here well past what the real hardware can deliver.
 
 
 def advance_jump(timer, cooldown, trigger):

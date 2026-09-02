@@ -93,7 +93,7 @@ def test_works_under_jax_jit():
 
 
 def test_jump_motor_velocity_value():
-    assert JUMP_MOTOR_VELOCITY == 15.0
+    assert JUMP_MOTOR_VELOCITY == 30.0
 
 
 def test_observation_size_is_102_with_jump_command():
@@ -160,7 +160,7 @@ def test_jump_reward_scales_are_registered():
     scales = default_config().reward_config.scales
     assert scales.jump_takeoff == 30.0
     assert scales.jump_air_time == 40.0
-    assert scales.jump_height == 60.0
+    assert scales.jump_height == 300.0
 
 
 def test_jump_reward_gate_is_nan_safe_for_non_finite_input():
@@ -474,7 +474,11 @@ def test_jump_height_pays_above_latched_datum_even_below_old_absolute_height():
     info["jump_active"] = jp.float32(1.0)
     info["jump_base_z0"] = jp.float32(crouch_z0)
 
-    contact = jp.ones(2, dtype=bool)  # grounded=True; matches sibling tests.
+    # airborne=True (both feet off the ground): jump_height is now gated on
+    # being airborne (Change 1), so this datum-latching regression test must
+    # exercise the airborne branch to keep testing what it was written to
+    # test rather than tripping the (separate, intentional) airborne gate.
+    contact = jp.zeros(2, dtype=bool)
     first_contact = jp.zeros(2, dtype=bool)
     done = jp.float32(0.0)
 
@@ -519,3 +523,69 @@ def test_jump_height_is_zero_when_inactive_even_above_latched_datum():
     )
 
     assert float(ret["jump_height"]) == 0.0
+
+
+def test_jump_height_requires_airborne_via_real_reward_path():
+    """Regression test for Change 1 (gate jump_height on being airborne).
+
+    Before this fix, jump_height integrated instantaneous height across the
+    whole 40-step jump window, so "extend the legs from the crouch and hold"
+    (grounded, 35 steps) out-earned a real ballistic jump (airborne, ~14
+    steps). This test proves the fix: with jump_active == 1.0 and base_z
+    well above the latched jump_base_z0, jump_height must be exactly 0.0
+    when both feet are in contact with the ground, and strictly positive
+    when both feet are off the ground -- the one signal that actually
+    distinguishes a jump from standing up.
+
+    Drives the real env._get_reward path, as the sibling real-path tests
+    above do, so a revert of the `* airborne` factor in joystick.py is
+    actually caught.
+    """
+    import jax
+    import jax.numpy as jp
+
+    from playground.open_duck_mini_v2.joystick import Joystick, default_config
+
+    cfg = default_config()
+    cfg.jump_prob = 0.0
+    env = Joystick(task="flat_terrain", config=cfg)
+
+    state = env.reset(jax.random.PRNGKey(0))
+
+    crouch_z0 = 0.15  # base height latched when the jump window opened
+    base_z = 0.30  # well above the latched datum
+    qpos = state.data.qpos.at[env._floating_base_qpos_addr + 2].set(
+        jp.float32(base_z)
+    )
+    data = state.data.replace(qpos=qpos)
+
+    info = dict(state.info)
+    info["jump_active"] = jp.float32(1.0)
+    info["jump_base_z0"] = jp.float32(crouch_z0)
+
+    first_contact = jp.zeros(2, dtype=bool)
+    done = jp.float32(0.0)
+
+    grounded_contact = jp.ones(2, dtype=bool)  # both feet down: standing, not jumping
+    ret_grounded = env._get_reward(
+        data,
+        jp.zeros(env.action_size),
+        info,
+        {},
+        done,
+        first_contact,
+        grounded_contact,
+    )
+    assert float(ret_grounded["jump_height"]) == 0.0
+
+    airborne_contact = jp.zeros(2, dtype=bool)  # both feet up: actually flying
+    ret_airborne = env._get_reward(
+        data,
+        jp.zeros(env.action_size),
+        info,
+        {},
+        done,
+        first_contact,
+        airborne_contact,
+    )
+    assert float(ret_airborne["jump_height"]) > 0.0

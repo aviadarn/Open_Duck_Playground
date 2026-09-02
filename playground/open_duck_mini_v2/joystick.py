@@ -63,7 +63,7 @@ def default_config() -> config_dict.ConfigDict:
         max_motor_velocity=5.24,  # rad/s
         jump_prob=1.0 / 250.0,  # ~ one jump attempt every 5 s at 50 Hz
         jump_motor_velocity=JUMP_MOTOR_VELOCITY,  # rad/s while the jump window is open
-        jump_height_cap=0.15,  # m, ceiling on the height reward
+        jump_height_cap=0.25,  # m, ceiling on the height reward
         jump_takeoff_vz_cap=5.0,  # m/s, ceiling on the takeoff reward
         noise_config=config_dict.create(
             level=1.0,  # Set to 0.0 to disable noise.
@@ -93,7 +93,7 @@ def default_config() -> config_dict.ConfigDict:
                 imitation=1.0,
                 jump_takeoff=30.0,
                 jump_air_time=40.0,
-                jump_height=60.0,
+                jump_height=300.0,
             ),
             tracking_sigma=0.01,  # was working at 0.01
         ),
@@ -755,7 +755,8 @@ class Joystick(open_duck_mini_v2_base.OpenDuckMiniV2Env):
                     base_z - info["jump_base_z0"],
                     0.0,
                     self._config.jump_height_cap,
-                ),
+                )
+                * airborne,
                 0.0,
             )
         )
