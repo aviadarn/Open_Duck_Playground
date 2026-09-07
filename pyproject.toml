@@ -8,28 +8,17 @@ dependencies = [
     "framesviewer>=1.0.2",
     # jax >=0.9 removed jax.device_put_replicated, still called by brax 0.14.2.
     #
-    # On Linux we use the `cuda12-local` extra, which links against the CUDA
-    # already present in the container image instead of pip-installing a private
-    # copy. That drops 13 nvidia-* wheels (2.79 GB) and cuts the uv cache from
-    # 11 GB to 3.8 GB. It REQUIRES an image that ships CUDA >= 12.6 with
-    # cuDNN >= 9.8 and NCCL -- `nvidia/cuda:12.9.1-cudnn-runtime-ubuntu22.04`
-    # is verified good (cuDNN 9.10.2, NCCL 2.27.3, nvrtc 12.9.86). On a plain
-    # Linux box with no system CUDA this will fail at runtime; use the `cuda12`
-    # extra there instead.
+    # The `cuda12` extra bundles its own CUDA (13 nvidia-* wheels, 2.79 GB), so
+    # it works on any Linux box regardless of what CUDA the host has. That
+    # portability is why it is the default.
     #
-    # Two pieces the runtime image does NOT ship, added back explicitly:
-    #   nvidia-cuda-nvcc-cu12  (39 MB) -- provides ptxas, which jax needs to
-    #                                     compile kernels; absent from the image
-    #   nvidia-nvshmem-cu12   (220 MB) -- required by jax-cuda12-plugin
-    #   nvidia-cuda-cupti-cu12 (10 MB) -- cuPTI; without it jax raises
-    #                                     "Unable to load cuPTI" and silently
-    #                                     falls back to CPU. Verified on a real
-    #                                     GPU box: omitting this gives
-    #                                     [CpuDevice(id=0)], not a hard error.
-    "jax[cuda12-local]>=0.5.0,<0.9 ; sys_platform == 'linux'",
-    "nvidia-cuda-nvcc-cu12>=12.6.85 ; sys_platform == 'linux'",
-    "nvidia-nvshmem-cu12>=3.2.5 ; sys_platform == 'linux'",
-    "nvidia-cuda-cupti-cu12>=12.1.105 ; sys_platform == 'linux'",
+    # vast_bootstrap.sh swaps this for the `cuda12-local` extra, which links
+    # against the container image's system CUDA instead and cuts the uv cache
+    # from 11 GB to 3.8 GB. That needs CUDA >= 12.6 with cuDNN >= 9.8, NCCL,
+    # and cuPTI -- see the bootstrap for the verified image. Do not make it the
+    # default: on a host without those libs jax does not fail loudly, it prints
+    # "Unable to load cuPTI" and silently falls back to CPU.
+    "jax[cuda12]>=0.5.0,<0.9 ; sys_platform == 'linux'",
     "jax>=0.5.0,<0.9 ; sys_platform != 'linux'",
     "jaxlib>=0.5.0,<0.9",
     "jaxtyping>=0.2.38",

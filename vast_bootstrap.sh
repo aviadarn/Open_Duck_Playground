@@ -4,17 +4,19 @@
 #   usage: vast_bootstrap.sh [TIMESTEPS] [TASK] [BRANCH]
 #   e.g.   vast_bootstrap.sh 300000000 flat_terrain feature/jump
 #
-# REQUIRED IMAGE
+# RECOMMENDED IMAGE
 #   nvidia/cuda:12.9.1-cudnn-runtime-ubuntu22.04
 #
-#   pyproject uses jax's `cuda12-local` extra on Linux, which links against the
-#   image's system CUDA instead of pip-installing a private copy. That needs
-#   CUDA >= 12.6 with cuDNN >= 9.8 and NCCL. This image is verified good:
-#   cuDNN 9.10.2, NCCL 2.27.3, nvrtc 12.9.86, cuBLAS/cuSOLVER/cuSPARSE/cuFFT.
-#   It cuts the uv cache from 11 GB to 3.8 GB.
+#   pyproject defaults to jax's `cuda12` extra, which bundles its own CUDA and
+#   works anywhere. On an image that ships system CUDA this script swaps in the
+#   `cuda12-local` extra, which links against it instead -- dropping 13
+#   nvidia-* wheels and cutting the uv cache from 11 GB to 3.8 GB.
 #
-#   An older image FAILS: nvidia/cuda:12.4.1-cudnn-* ships cuDNN 9.1, below the
-#   9.8 floor jax-cuda12-plugin 0.8.3 requires.
+#   The swap requires CUDA >= 12.6 with cuDNN >= 9.8 and NCCL. The image above
+#   is verified good on real GPU hardware: cuDNN 9.10.2, NCCL 2.27.3,
+#   nvrtc 12.9.86. nvidia/cuda:12.4.1-cudnn-* is NOT (cuDNN 9.1, below the 9.8
+#   floor). If the libs are missing this script leaves pyproject alone and just
+#   does the slower portable install.
 #
 # RUN IT DETACHED
 #   setsid nohup bash vast_bootstrap.sh ... > /root/bootstrap.log 2>&1 < /dev/null &
@@ -49,6 +51,29 @@ rm -rf Open_Duck_Playground
 git clone --branch "$BRANCH" https://github.com/aviadarn/Open_Duck_Playground.git
 cd Open_Duck_Playground
 git log --oneline -1
+
+# Swap to the cuda12-local extra when the image supplies system CUDA. cuPTI,
+# ptxas (cuda-nvcc) and nvshmem are not in the runtime image, so add them back
+# explicitly -- without cuPTI jax silently falls back to CPU rather than erroring.
+CUDNN_VER=$(ls /usr/lib/x86_64-linux-gnu/libcudnn.so.9.* 2>/dev/null | head -1 | sed 's/.*so\.9\.//' | cut -d. -f1)
+if [ -n "${CUDNN_VER:-}" ] && [ "$CUDNN_VER" -ge 8 ] && ls /usr/lib/x86_64-linux-gnu/libnccl.so.2.* >/dev/null 2>&1; then
+  echo "== system cuDNN 9.$CUDNN_VER + NCCL present: using jax[cuda12-local] =="
+  python3 - <<'PATCH'
+import re
+p = "pyproject.toml"
+s = open(p).read()
+s = s.replace(
+    '"jax[cuda12]>=0.5.0,<0.9 ; sys_platform == \'linux\'",',
+    '"jax[cuda12-local]>=0.5.0,<0.9 ; sys_platform == \'linux\'",\n'
+    '    "nvidia-cuda-nvcc-cu12>=12.6.85 ; sys_platform == \'linux\'",\n'
+    '    "nvidia-cuda-cupti-cu12>=12.1.105 ; sys_platform == \'linux\'",\n'
+    '    "nvidia-nvshmem-cu12>=3.2.5 ; sys_platform == \'linux\'",')
+open(p, "w").write(s)
+print("patched pyproject for cuda12-local")
+PATCH
+else
+  echo "== no suitable system CUDA: keeping portable jax[cuda12] (slower install) =="
+fi
 
 echo "== sync =="
 SYNC_START=$(date +%s)
