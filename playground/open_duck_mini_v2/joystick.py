@@ -28,6 +28,10 @@ from mujoco_playground._src.collision import geoms_colliding
 
 from . import constants
 from . import base as open_duck_mini_v2_base
+from playground.open_duck_mini_v2.jump import (
+    JUMP_MOTOR_VELOCITY,
+    advance_jump,
+)
 
 # from playground.common.utils import LowPassActionFilter
 from playground.common.poly_reference_motion import PolyReferenceMotion
@@ -57,6 +61,10 @@ def default_config() -> config_dict.ConfigDict:
         history_len=0,
         soft_joint_pos_limit_factor=0.95,
         max_motor_velocity=5.24,  # rad/s
+        jump_prob=1.0 / 250.0,  # ~ one jump attempt every 5 s at 50 Hz
+        jump_motor_velocity=JUMP_MOTOR_VELOCITY,  # rad/s while the jump window is open
+        jump_height_cap=0.25,  # m, ceiling on the height reward
+        jump_takeoff_vz_cap=5.0,  # m/s, ceiling on the takeoff reward
         noise_config=config_dict.create(
             level=1.0,  # Set to 0.0 to disable noise.
             action_min_delay=0,  # env steps
@@ -83,6 +91,9 @@ def default_config() -> config_dict.ConfigDict:
                 stand_still=-0.2,  # was -1.0 TODO try to relax this a bit ?
                 alive=20.0,
                 imitation=1.0,
+                jump_takeoff=30.0,
+                jump_air_time=40.0,
+                jump_height=300.0,
             ),
             tracking_sigma=0.01,  # was working at 0.01
         ),
@@ -299,6 +310,11 @@ class Joystick(open_duck_mini_v2_base.OpenDuckMiniV2Env):
             "imitation_i": 0,
             "current_reference_motion": current_reference_motion,
             "imitation_phase": jp.zeros(2),
+            # jump related
+            "jump_timer": jp.int32(0),
+            "jump_cooldown": jp.int32(0),
+            "jump_active": jp.float32(0.0),
+            "jump_base_z0": jp.float32(0.0),
         }
 
         metrics = {}
@@ -401,6 +417,38 @@ class Joystick(open_duck_mini_v2_base.OpenDuckMiniV2Env):
 
         ####
 
+        # Jump state machine. Fires at random during training; the same
+        # advance_jump() runs at inference with a key-press trigger.
+        state.info["rng"], jump_rng = jax.random.split(state.info["rng"])
+        jump_trigger = jax.random.bernoulli(
+            jump_rng, p=self._config.jump_prob
+        ).astype(jp.float32)
+        prev_active = state.info["jump_active"]
+        jump_timer, jump_cooldown, jump_active = advance_jump(
+            state.info["jump_timer"],
+            state.info["jump_cooldown"],
+            jump_trigger,
+        )
+        state.info["jump_timer"] = jump_timer.astype(jp.int32)
+        state.info["jump_cooldown"] = jump_cooldown.astype(jp.int32)
+        state.info["jump_active"] = jump_active.astype(jp.float32)
+        state.info["command"] = state.info["command"].at[7].set(jump_active)
+
+        # Latch the base height at the instant the jump window opens (the
+        # crouch height at trigger time), so jump_height in _get_reward can
+        # be measured against a datum the robot can actually clear instead
+        # of the absolute standing height (nominal_base_z), which a jump
+        # launched from a crouch may never exceed even while airborne.
+        # Branchless so this survives jit/vmap; state.data here is the
+        # pre-physics-step data, i.e. the crouch height at trigger time.
+        just_fired = (jump_active > 0.0) * (prev_active <= 0.0)
+        base_z_now = state.data.qpos[self._floating_base_qpos_addr + 2]
+        jump_base_z0 = (
+            just_fired * base_z_now
+            + (1.0 - just_fired) * state.info["jump_base_z0"]
+        )
+        state.info["jump_base_z0"] = jump_base_z0.astype(jp.float32)
+
         motor_targets = (
             self._default_actuator + action_w_delay * self._config.action_scale
         )
@@ -408,12 +456,17 @@ class Joystick(open_duck_mini_v2_base.OpenDuckMiniV2Env):
         if USE_MOTOR_SPEED_LIMITS:
             prev_motor_targets = state.info["motor_targets"]
 
+            # Walking keeps the tuned servo limit; the jump window raises it.
+            # Sim-only: real STS3215 servos cannot slew this fast.
+            max_motor_velocity = (
+                self._config.max_motor_velocity * (1.0 - jump_active)
+                + self._config.jump_motor_velocity * jump_active
+            )
+
             motor_targets = jp.clip(
                 motor_targets,
-                prev_motor_targets
-                - self._config.max_motor_velocity * self.dt,  # control dt
-                prev_motor_targets
-                + self._config.max_motor_velocity * self.dt,  # control dt
+                prev_motor_targets - max_motor_velocity * self.dt,  # control dt
+                prev_motor_targets + max_motor_velocity * self.dt,  # control dt
             )
 
         # motor_targets.at[5:9].set(state.info["command"][3:])  # head joints
@@ -458,6 +511,10 @@ class Joystick(open_duck_mini_v2_base.OpenDuckMiniV2Env):
             state.info["step"] > 500,
             self.sample_command(cmd_rng),
             state.info["command"],
+        )
+        # sample_command() zeroes slot 7; the timer owns it, so restore it.
+        state.info["command"] = state.info["command"].at[7].set(
+            state.info["jump_active"]
         )
         state.info["step"] = jp.where(
             done | (state.info["step"] > 500),
@@ -666,6 +723,54 @@ class Joystick(open_duck_mini_v2_base.OpenDuckMiniV2Env):
             ),
         }
 
+        jump_active = info["jump_active"]
+        base_z = data.qpos[self._floating_base_qpos_addr + 2]
+        base_vz = data.qvel[self._floating_base_qvel_addr + 2]
+        grounded = jp.any(contact)
+        airborne = jp.all(~contact)
+
+        # Dense bootstrap term: reward pushing upward while a foot is still
+        # down. Without this the height reward is never discovered, because a
+        # walking policy never leaves the ground by accident.
+        #
+        # jp.where (not a multiplicative gate) is required here: jp.clip does
+        # not sanitize non-finite input (clip(nan, 0, inf) == nan and
+        # clip(inf, 0, inf) == inf), and both are absorbing under
+        # multiplication by 0.0 (x * 0.0 == nan for non-finite x). jp.where
+        # selects the literal 0.0 on the inactive branch regardless of what
+        # the other branch evaluates to, which is what actually guarantees
+        # the term is exactly 0.0 when jump_active == 0.0.
+        ret["jump_takeoff"] = jp.nan_to_num(
+            jp.where(
+                jump_active > 0.0,
+                jp.clip(base_vz, 0.0, self._config.jump_takeoff_vz_cap) * grounded,
+                0.0,
+            )
+        )
+        ret["jump_air_time"] = airborne * jump_active
+        ret["jump_height"] = jp.nan_to_num(
+            jp.where(
+                jump_active > 0.0,
+                jp.clip(
+                    base_z - info["jump_base_z0"],
+                    0.0,
+                    self._config.jump_height_cap,
+                )
+                * airborne,
+                0.0,
+            )
+        )
+
+        # Gate the terms that would otherwise fight the jump.
+        # imitation pins joints to a walking reference at weight 15.
+        ret["imitation"] = ret["imitation"] * (1.0 - jump_active)
+        # stand_still punishes joint motion when the velocity command is ~0,
+        # which would penalise a jump in place.
+        ret["stand_still"] = ret["stand_still"] * (1.0 - jump_active)
+        # action_rate at -0.5 suppresses the fast action changes a jump needs.
+        # Soften rather than remove, or the motion gets jittery.
+        ret["action_rate"] = ret["action_rate"] * (1.0 - 0.5 * jump_active)
+
         return ret
 
     def sample_command(self, rng: jax.Array) -> jax.Array:
@@ -710,7 +815,7 @@ class Joystick(open_duck_mini_v2_base.OpenDuckMiniV2Env):
         # With 10% chance, set everything to zero.
         return jp.where(
             jax.random.bernoulli(rng4, p=0.1),
-            jp.zeros(7),
+            jp.zeros(8),
             jp.hstack(
                 [
                     lin_vel_x,
@@ -720,6 +825,7 @@ class Joystick(open_duck_mini_v2_base.OpenDuckMiniV2Env):
                     head_pitch,
                     head_yaw,
                     head_roll,
+                    0.0,  # jump flag; owned by the timer in step()
                 ]
             ),
         )

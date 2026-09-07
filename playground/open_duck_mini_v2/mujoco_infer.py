@@ -9,6 +9,7 @@ from playground.common.onnx_infer import OnnxInfer
 from playground.common.poly_reference_motion_numpy import PolyReferenceMotion
 from playground.common.utils import LowPassActionFilter
 
+from playground.open_duck_mini_v2.jump import JUMP_MOTOR_VELOCITY, advance_jump
 from playground.open_duck_mini_v2.mujoco_infer_base import MJInferBase
 
 USE_MOTOR_SPEED_LIMITS = True
@@ -49,7 +50,11 @@ class MjInfer(MJInferBase):
         self.last_action = np.zeros(self.num_dofs)
         self.last_last_action = np.zeros(self.num_dofs)
         self.last_last_last_action = np.zeros(self.num_dofs)
-        self.commands = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        self.commands = [0.0] * 8  # last slot is the jump flag
+        self.jump_timer = 0
+        self.jump_cooldown = 0
+        self.jump_requested = False
+        self.jump_motor_velocity = JUMP_MOTOR_VELOCITY  # matches training
 
         self.imitation_i = 0
         self.imitation_phase = np.array([0, 0])
@@ -104,6 +109,16 @@ class MjInfer(MJInferBase):
 
     def key_callback(self, keycode):
         print(f"key: {keycode}")
+        if keycode == 32:  # space
+            # Only latch the request. The timer owns commands[7]; writing it
+            # here would be clobbered, because this callback zeroes the
+            # velocity commands on every keypress. Return immediately so we
+            # don't fall through to that zeroing code below: jumps fire
+            # independently of the velocity command during training, so the
+            # robot should keep walking (or standing) through a jump rather
+            # than being forced to a dead stop just because space was hit.
+            self.jump_requested = True
+            return
         if keycode == 72:  # h
             self.head_control_mode = not self.head_control_mode
         lin_vel_x = 0
@@ -195,6 +210,17 @@ class MjInfer(MJInferBase):
                                     ),
                                 ]
                             )
+                        trigger = 1 if self.jump_requested else 0
+                        self.jump_requested = False
+                        (
+                            self.jump_timer,
+                            self.jump_cooldown,
+                            jump_active,
+                        ) = advance_jump(
+                            self.jump_timer, self.jump_cooldown, trigger
+                        )
+                        self.commands[7] = float(jump_active)
+
                         obs = self.get_obs(
                             self.data,
                             self.commands,
@@ -214,13 +240,19 @@ class MjInfer(MJInferBase):
                         )
 
                         if USE_MOTOR_SPEED_LIMITS:
+                            # Mirrors the jump-aware clamp in joystick.py.
+                            max_motor_velocity = (
+                                self.jump_motor_velocity
+                                if self.commands[7] > 0.0
+                                else self.max_motor_velocity
+                            )
                             self.motor_targets = np.clip(
                                 self.motor_targets,
                                 self.prev_motor_targets
-                                - self.max_motor_velocity
+                                - max_motor_velocity
                                 * (self.sim_dt * self.decimation),
                                 self.prev_motor_targets
-                                + self.max_motor_velocity
+                                + max_motor_velocity
                                 * (self.sim_dt * self.decimation),
                             )
 

@@ -3,16 +3,30 @@ name = "Open_Duck_Playground"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "framesviewer>=1.0.2",
-    "jax[cuda12]>=0.5.0",
-    "jaxlib>=0.5.0",
+    # jax >=0.9 removed jax.device_put_replicated, still called by brax 0.14.2.
+    #
+    # The `cuda12` extra bundles its own CUDA (13 nvidia-* wheels, 2.79 GB), so
+    # it works on any Linux box regardless of what CUDA the host has. That
+    # portability is why it is the default.
+    #
+    # vast_bootstrap.sh swaps this for the `cuda12-local` extra, which links
+    # against the container image's system CUDA instead and cuts the uv cache
+    # from 11 GB to 3.8 GB. That needs CUDA >= 12.6 with cuDNN >= 9.8, NCCL,
+    # and cuPTI -- see the bootstrap for the verified image. Do not make it the
+    # default: on a host without those libs jax does not fail loudly, it prints
+    # "Unable to load cuPTI" and silently falls back to CPU.
+    "jax[cuda12]>=0.5.0,<0.9 ; sys_platform == 'linux'",
+    "jax>=0.5.0,<0.9 ; sys_platform != 'linux'",
+    "jaxlib>=0.5.0,<0.9",
     "jaxtyping>=0.2.38",
     "matplotlib>=3.10.0",
     "mediapy>=1.2.2",
     "onnxruntime>=1.20.1",
-    "playground>=0.0.3",
+    # playground >=0.1.0 removed mujoco_playground._src.collision (geoms_colliding)
+    "playground==0.0.5",
     "pygame>=2.6.1",
     "tensorflow>=2.18.0",
     "tf2onnx>=1.16.1",
@@ -21,3 +35,8 @@ dependencies = [
 requires = ["setuptools"]
 [tool.setuptools]
 packages = ["playground"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
