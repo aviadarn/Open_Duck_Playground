@@ -21,9 +21,15 @@ dependencies = [
     #   nvidia-cuda-nvcc-cu12  (39 MB) -- provides ptxas, which jax needs to
     #                                     compile kernels; absent from the image
     #   nvidia-nvshmem-cu12   (220 MB) -- required by jax-cuda12-plugin
+    #   nvidia-cuda-cupti-cu12 (10 MB) -- cuPTI; without it jax raises
+    #                                     "Unable to load cuPTI" and silently
+    #                                     falls back to CPU. Verified on a real
+    #                                     GPU box: omitting this gives
+    #                                     [CpuDevice(id=0)], not a hard error.
     "jax[cuda12-local]>=0.5.0,<0.9 ; sys_platform == 'linux'",
     "nvidia-cuda-nvcc-cu12>=12.6.85 ; sys_platform == 'linux'",
     "nvidia-nvshmem-cu12>=3.2.5 ; sys_platform == 'linux'",
+    "nvidia-cuda-cupti-cu12>=12.1.105 ; sys_platform == 'linux'",
     "jax>=0.5.0,<0.9 ; sys_platform != 'linux'",
     "jaxlib>=0.5.0,<0.9",
     "jaxtyping>=0.2.38",
