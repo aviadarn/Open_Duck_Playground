@@ -22,16 +22,12 @@ ROOT_PATH = epath.Path(__file__).parent
 FLAT_TERRAIN_XML = ROOT_PATH / "xmls" / "scene_flat_terrain.xml"
 ROUGH_TERRAIN_XML = ROOT_PATH / "xmls" / "scene_rough_terrain.xml"
 FLAT_TERRAIN_BACKLASH_XML = ROOT_PATH / "xmls" / "scene_flat_terrain_backlash.xml"
-# Sim-only variant with actuator kp and forcerange scaled 4x, for jump
-# experiments. See the comment in open_duck_mini_v2_jump.xml.
-FLAT_TERRAIN_JUMP_XML = ROOT_PATH / "xmls" / "scene_flat_terrain_jump.xml"
 ROUGH_TERRAIN_BACKLASH_XML = ROOT_PATH / "xmls" / "scene_rough_terrain_backlash.xml"
 
 
 def task_to_xml(task_name: str) -> epath.Path:
     return {
         "flat_terrain": FLAT_TERRAIN_XML,
-        "flat_terrain_jump": FLAT_TERRAIN_JUMP_XML,
         "rough_terrain": ROUGH_TERRAIN_XML,
         "flat_terrain_backlash": FLAT_TERRAIN_BACKLASH_XML,
         "rough_terrain_backlash": ROUGH_TERRAIN_BACKLASH_XML,
