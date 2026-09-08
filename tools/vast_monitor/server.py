@@ -252,10 +252,54 @@ def make_handler(mon: Monitor):
     return Handler
 
 
+def resolve_instance(instance_id=None):
+    """Look up (host, port) from the vastai CLI.
+
+    With no id, picks the single running instance; refuses to guess when there
+    are several, because attaching the monitor to the wrong box would look like
+    a healthy idle machine rather than an error.
+    """
+    import shutil
+
+    if not shutil.which("vastai"):
+        raise SystemExit("vastai CLI not found; pass --host and --port instead")
+    raw = subprocess.run(
+        ["vastai", "show", "instances", "--raw"],
+        capture_output=True, text=True, check=False,
+    ).stdout
+    try:
+        rows = json.loads(raw)
+    except json.JSONDecodeError:
+        raise SystemExit("could not parse `vastai show instances`; pass --host/--port")
+
+    running = [r for r in rows if r.get("actual_status") == "running"]
+    if instance_id is not None:
+        running = [r for r in running if str(r.get("id")) == str(instance_id)]
+        if not running:
+            raise SystemExit(f"instance {instance_id} is not running")
+    if not running:
+        raise SystemExit("no running vast instances; start one, or pass --host/--port")
+    if len(running) > 1:
+        ids = ", ".join(str(r.get("id")) for r in running)
+        raise SystemExit(f"several instances running ({ids}); choose one with --instance")
+
+    inst = running[0]
+    host = inst.get("public_ipaddr")
+    port = inst.get("direct_port_start")
+    if not host or not port or int(port) < 0:
+        # Some hosts expose no direct port; fall back to the ssh proxy.
+        host, port = inst.get("ssh_host"), inst.get("ssh_port")
+    if not host or not port:
+        raise SystemExit("instance has no reachable ssh endpoint yet; try again shortly")
+    print(f"resolved instance {inst.get('id')} ({inst.get('gpu_name')}) -> {host}:{port}")
+    return str(host), str(port)
+
+
 def main():
     ap = argparse.ArgumentParser(description="Live vast.ai training dashboard")
-    ap.add_argument("--host", required=True, help="instance IP (see: vastai ssh-url <id>)")
-    ap.add_argument("--port", required=True, help="instance SSH port")
+    ap.add_argument("--host", help="instance IP; omit to auto-detect via the vastai CLI")
+    ap.add_argument("--port", help="instance SSH port; omit to auto-detect")
+    ap.add_argument("--instance", help="vast instance id, when more than one is running")
     ap.add_argument("--user", default="root")
     ap.add_argument("--key", default=str(Path.home() / ".ssh" / "id_ed25519_vast"))
     ap.add_argument("--log", default="/root/train.log", help="remote log to tail")
@@ -265,6 +309,9 @@ def main():
 
     if not os.path.exists(args.key):
         raise SystemExit(f"ssh key not found: {args.key}")
+
+    if not args.host or not args.port:
+        args.host, args.port = resolve_instance(args.instance)
 
     ssh_args = [
         "-i", args.key,

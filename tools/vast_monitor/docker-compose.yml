@@ -1,0 +1,57 @@
+# Local observability stack for a vast.ai training box.
+#
+#   1. python3 exporter.py          # on the host: SSH -> /metrics + Loki push
+#   2. docker compose up -d         # here
+#   3. open http://localhost:3000   # Grafana, dashboard is pre-provisioned
+#
+# Everything runs on your machine. Nothing is installed on the rented box and
+# no ports are exposed to the internet.
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: duck-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prom-data:/prometheus
+    ports:
+      - "9090:9090"
+    extra_hosts:
+      # Lets the container scrape the exporter running on the host. Docker
+      # Desktop provides this name; on plain Linux the mapping below adds it.
+      - "host.docker.internal:host-gateway"
+
+  loki:
+    image: grafana/loki:3.3.2
+    container_name: duck-loki
+    command: -config.file=/etc/loki/local-config.yaml
+    ports:
+      - "3100:3100"
+    volumes:
+      - loki-data:/loki
+
+  grafana:
+    image: grafana/grafana:11.5.1
+    container_name: duck-grafana
+    environment:
+      # Local-only tool: anonymous admin avoids a login prompt on every start.
+      # Do not expose port 3000 beyond localhost with these settings.
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+      - GF_USERS_DEFAULT_THEME=dark
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./grafana/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on: [prometheus, loki]
+
+volumes:
+  prom-data:
+  loki-data:
+  grafana-data:

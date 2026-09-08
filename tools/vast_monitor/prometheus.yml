@@ -1,0 +1,12 @@
+global:
+  # 1s matches the sampler. Prometheus defaults to 15s; this is deliberately
+  # fast because the question being answered is "is the GPU busy right now",
+  # and 15s can miss an entire compile phase. Retention is capped at 15d in
+  # the compose file to keep the cost of that resolution bounded.
+  scrape_interval: 1s
+  scrape_timeout: 1s
+
+scrape_configs:
+  - job_name: vast
+    static_configs:
+      - targets: ["host.docker.internal:9101"]

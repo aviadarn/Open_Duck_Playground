@@ -5,12 +5,19 @@ the training log, and the eval-reward curve. Stdlib only, no dependencies, no
 network access needed beyond SSH to the instance.
 
 ```bash
-# get the instance's real ssh endpoint
-vastai ssh-url <instance-id>          # -> ssh://root@1.2.3.4:42758
+# with exactly one instance running, it finds the endpoint itself:
+python3 tools/vast_monitor/server.py
 
+# several running? name one:
+python3 tools/vast_monitor/server.py --instance 50251839
+
+# or point it manually (vastai ssh-url <id> gives the endpoint):
 python3 tools/vast_monitor/server.py --host 1.2.3.4 --port 42758
-# open http://localhost:8770
 ```
+
+Then open **http://localhost:8770**. The page is served from your own machine
+and reaches the box over SSH -- nothing is exposed publicly and no data leaves
+your laptop.
 
 Options: `--user` (default `root`), `--key` (default `~/.ssh/id_ed25519_vast`),
 `--log` (default `/root/train.log`), `--interval` (default `1` second),
@@ -55,6 +62,37 @@ instead — which is the same content `docker logs` would print.
 
 History is not persisted. The graph holds the last 900 samples in memory (15
 minutes at 1 Hz) and starts fresh when the server restarts.
+
+## Prometheus + Grafana + Loki
+
+A full observability stack, for when you want durable history, real dashboards
+and log search rather than a live view that resets on restart.
+
+```bash
+python3 tools/vast_monitor/exporter.py     # host: SSH -> /metrics + Loki push
+cd tools/vast_monitor && docker compose up -d
+open http://localhost:3000                 # dashboard is pre-provisioned
+```
+
+Prometheus scrapes `host.docker.internal:9101` every second; Grafana and Loki
+come up with datasources and the "Duck training" dashboard already loaded.
+`docker compose down` stops it; add `-v` to discard the stored history.
+
+**Everything runs on your machine.** The rented box gets nothing installed --
+no node_exporter, no promtail, no agent. That is deliberate: a vast instance is
+itself a Docker container, so running agents there means either
+Docker-in-Docker (usually unavailable) or reinstalling into every fresh rental
+and opening ports vast fixes at create time. Reusing the SSH sampler avoids all
+of it, and it is the transport already proven against real hardware.
+
+The scrape interval is 1s rather than Prometheus's usual 15s, because the
+question being answered is "is the GPU busy right now" and 15s can miss an
+entire compile phase. Retention is capped at 15 days to bound the cost of that
+resolution.
+
+Grafana runs with anonymous admin access and no login form, which is fine for
+a tool bound to localhost. Do not expose port 3000 beyond your machine with
+those settings.
 
 ## Tests
 
