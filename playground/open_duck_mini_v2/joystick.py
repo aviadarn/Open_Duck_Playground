@@ -61,7 +61,14 @@ def default_config() -> config_dict.ConfigDict:
         history_len=0,
         soft_joint_pos_limit_factor=0.95,
         max_motor_velocity=5.24,  # rad/s
-        jump_prob=1.0 / 250.0,  # ~ one jump attempt every 5 s at 50 Hz
+        # ~one jump attempt every 16 s at 50 Hz. Lowered from 1/250, where the
+        # jump window covered ~12% of all training steps (250 idle + 40 window
+        # + 50 cooldown). Inside the window imitation and stand_still are off,
+        # action_rate is halved and the motor slew limit is ~6x higher, and
+        # that perturbation cost the gait its turning: measured yaw tracking
+        # was 0.92 rad/s on the walking-only policy vs 0.12 after jump
+        # training, against a 1.0 command. 1/800 puts the window at ~4.5%.
+        jump_prob=1.0 / 800.0,
         jump_motor_velocity=JUMP_MOTOR_VELOCITY,  # rad/s while the jump window is open
         jump_height_cap=0.25,  # m, ceiling on the height reward
         jump_takeoff_vz_cap=5.0,  # m/s, ceiling on the takeoff reward
