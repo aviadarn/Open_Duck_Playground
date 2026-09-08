@@ -4,6 +4,21 @@ Live dashboard for a training run on a vast.ai box: GPU / CPU / memory graphs,
 the training log, and the eval-reward curve. Stdlib only, no dependencies, no
 network access needed beyond SSH to the instance.
 
+### One command
+
+From the repo root, while a run is live:
+
+```bash
+./monitor.sh          # Grafana + Prometheus + Loki, opens the dashboard
+./monitor.sh --lite   # the zero-dependency page only, no Docker
+./monitor.sh --stop   # stop everything it started
+```
+
+It finds the instance itself, so there is nothing to look up between starting a
+run and watching it. `vast_bootstrap.sh` prints this reminder when a run starts.
+
+### Or run the pieces directly
+
 ```bash
 # with exactly one instance running, it finds the endpoint itself:
 python3 tools/vast_monitor/server.py

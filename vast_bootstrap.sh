@@ -95,3 +95,10 @@ PYTHONUNBUFFERED=1 setsid nohup uv run playground/open_duck_mini_v2/runner.py \
   --task "$TASK" --num_timesteps "$TIMESTEPS" \
   > "$WORKDIR"/train.log 2>&1 < /dev/null &
 echo "started pid $!  -> tail -f $WORKDIR/train.log"
+echo
+echo "=============================================================="
+echo " Watch this run from your laptop, in the repo checkout:"
+echo "     ./monitor.sh            # Grafana + Prometheus + Loki"
+echo "     ./monitor.sh --lite     # no Docker needed"
+echo " It finds this instance itself; no host or port to look up."
+echo "=============================================================="
