@@ -108,6 +108,17 @@ class MjInfer(MJInferBase):
         return obs
 
     def key_callback(self, keycode):
+        """Viewer key handler. Keycodes are GLFW's, so verify against
+        glfw.KEY_* rather than guessing from the letter -- KEY_Q is 81 and
+        KEY_A is 65, which has caused these bindings to be mislabelled before.
+
+        up/down    walk forward / back
+        left/right strafe left / right   (or aim head yaw in head mode)
+        q / e      turn left / right     (or head roll in head mode)
+        p / ;      gait frequency +/- 0.1
+        h          toggle head-control mode
+        space      jump
+        """
         print(f"key: {keycode}")
         if keycode == 32:  # space
             # Only latch the request. The timer owns commands[7]; writing it
@@ -133,13 +144,13 @@ class MjInfer(MJInferBase):
                 lin_vel_y = self.COMMANDS_RANGE_Y[1]
             if keycode == 262:  # arrow right
                 lin_vel_y = self.COMMANDS_RANGE_Y[0]
-            if keycode == 81:  # a
+            if keycode == 81:  # q (GLFW KEY_Q; 'a' would be 65)
                 ang_vel = self.COMMANDS_RANGE_THETA[1]
             if keycode == 69:  # e
                 ang_vel = self.COMMANDS_RANGE_THETA[0]
             if keycode == 80:  # p
                 self.phase_frequency_factor += 0.1
-            if keycode == 59:  # m
+            if keycode == 59:  # ; (GLFW KEY_SEMICOLON; 'm' would be 77)
                 self.phase_frequency_factor -= 0.1
         else:
             neck_pitch = 0
@@ -154,7 +165,7 @@ class MjInfer(MJInferBase):
                 head_yaw = self.HEAD_YAW_RANGE[1]
             if keycode == 262:  # arrow right
                 head_yaw = self.HEAD_YAW_RANGE[0]
-            if keycode == 81:  # a
+            if keycode == 81:  # q (GLFW KEY_Q; 'a' would be 65)
                 head_roll = self.HEAD_ROLL_RANGE[1]
             if keycode == 69:  # e
                 head_roll = self.HEAD_ROLL_RANGE[0]
