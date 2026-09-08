@@ -18,7 +18,17 @@ INTERVAL="${1:-1}"
 # CPU utilisation needs two /proc/stat readings, so carry the previous one.
 read_cpu_totals() {
     # busy total
-    awk '/^cpu /{idle=$5+$6; total=0; for(i=2;i<=NF;i++) total+=$i; print total-idle, total}' /proc/stat
+    #
+    # printf "%.0f", not print and not "%d". Both alternatives are wrong on
+    # the remote, which uses mawk:
+    #   print  -> OFMT is %.6g, so these counters come out as "8.55381e+09"
+    #             and bash arithmetic refuses them ("invalid arithmetic
+    #             operator").
+    #   %d     -> mawk clamps to INT32, so anything past 2147483647 silently
+    #             saturates and CPU% becomes garbage rather than erroring.
+    # A short-lived container never reaches those magnitudes; a real rented
+    # box does within hours of uptime.
+    awk '/^cpu /{idle=$5+$6; total=0; for(i=2;i<=NF;i++) total+=$i; printf "%.0f %.0f\n", total-idle, total}' /proc/stat
 }
 
 read prev_busy prev_total < <(read_cpu_totals)
